@@ -81,11 +81,17 @@ public sealed class BoundedTopic<T>(int capacity)
     {
         try
         {
-            return cancellationToken.IsCancellationRequested
-                ? new ValueTask(Task.FromCanceled<T>(cancellationToken))
-                : TryWrite(item)
-                    ? default
-                    : WriteAsyncCore(item, this, cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return ValueTask.FromCanceled(cancellationToken);
+            }
+
+            if (TryWrite(item))
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            return WriteAsyncCore(item, this, cancellationToken);
         }
         catch (Exception e)
         {
@@ -110,18 +116,14 @@ public sealed class BoundedTopic<T>(int capacity)
     {
         lock (SyncObj)
         {
+            if (Completed)
+            {
+                throw new ChannelClosedException();
+            }
+            
             var reader = new BoundedTopicReader<T>(this, Buffer.TailSequence);
             _readers.Add(reader);
             return reader;
-        }
-    }
-
-    internal void RemoveReader(BoundedTopicReader<T> reader)
-    {
-        lock (SyncObj)
-        {
-            _readers.Remove(reader);
-            TryAdvanceHead();
         }
     }
 
@@ -150,9 +152,7 @@ public sealed class BoundedTopic<T>(int capacity)
             return;
         }
         
-        if (Buffer.RemainingSize > 0
-            && _writers.TryDequeue(out var writer)
-            && !writer.Task.IsCompletedSuccessfully)
+        if (Buffer.RemainingSize > 0 && _writers.TryDequeue(out var writer))
         {
             writer.TrySetResult();
         }

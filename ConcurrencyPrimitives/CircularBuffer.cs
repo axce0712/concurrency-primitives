@@ -1,6 +1,8 @@
-﻿namespace ConcurrencyPrimitives;
+﻿using System.Collections;
 
-public sealed class CircularBuffer<T>
+namespace ConcurrencyPrimitives;
+
+public sealed class CircularBuffer<T> : IEnumerable<T>
 {
     private readonly int _capacity;
     private T[] _buffer;
@@ -30,7 +32,26 @@ public sealed class CircularBuffer<T>
             return false;
         }
 
-        EnsureBufferCapacity();
+        if (_size == _buffer.Length)
+        {
+            var newLength = Math.Min(_buffer.Length * 2, _capacity);
+            var newBuffer = new T[newLength];
+            if (_head < _tail)
+            {
+                Array.Copy(_buffer, _head, newBuffer, 0, _size);
+            }
+            else
+            {
+                var rightCount = _buffer.Length - _head;
+                Array.Copy(_buffer, _head, newBuffer, 0, rightCount);
+                Array.Copy(_buffer, 0, newBuffer, rightCount, _tail);
+            }
+
+            _buffer = newBuffer;
+            _head = 0;
+            _tail = _size;
+        }
+
         _buffer[_tail] = item;
         _tail = (_tail + 1) % _buffer.Length;
         _size++;
@@ -53,28 +74,13 @@ public sealed class CircularBuffer<T>
         return true;
     }
 
-    private void EnsureBufferCapacity()
+    public IEnumerator<T> GetEnumerator()
     {
-        if (_size < _buffer.Length)
+        for (var i = HeadSequence; i < TailSequence; i++)
         {
-            return;
+            yield return this[i];
         }
-
-        var newLength = Math.Min(_buffer.Length * 2, _capacity);
-        var newBuffer = new T[newLength];
-        if (_head < _tail)
-        {
-            Array.Copy(_buffer, _head, newBuffer, 0, _size);
-        }
-        else
-        {
-            var rightCount = _buffer.Length - _head;
-            Array.Copy(_buffer, _head, newBuffer, 0, rightCount);
-            Array.Copy(_buffer, 0, newBuffer, rightCount, _tail);
-        }
-
-        _buffer = newBuffer;
-        _head = 0;
-        _tail = _size;
     }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }

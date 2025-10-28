@@ -26,8 +26,8 @@ public sealed class BoundedTopicTests
         var reader1 = sut.CreateReader();
         var reader2 = sut.CreateReader();
 
-        var read1Task = reader1.ReadAsync().AsTask();
-        var read2Task = reader2.ReadAsync().AsTask();
+        var read1Task = Task.Run(async () => await reader1.ReadAsync());
+        var read2Task = Task.Run(async () => await reader2.ReadAsync());
         await sut.WriteAsync(1);
         var actual = await Task.WhenAll(read1Task, read2Task);
 

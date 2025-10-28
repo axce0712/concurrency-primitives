@@ -2,81 +2,35 @@
 
 namespace ConcurrencyPrimitives;
 
-public sealed class AsyncBoundedTopic<T>
+public sealed class AsyncBoundedTopic<T>(int capacity)
 {
-    private readonly int _capacity;
-
-    // Circular buffer
-    private T[] _buffer;
-    private int _head; // physical index of first valid item
-    private int _tail; // physical index of next free slot
-    private int _size;
-
     // Readers
     private readonly List<AsyncBoundedTopicReader<T>> _readers = [];
+    
+    // Writers waiting for space
+    private TaskCompletionSource? _tcs; 
 
     // Async lock for thread-safety
     internal AsyncLock Lock { get; } = new();
-
-    // Writers waiting for space
-    private TaskCompletionSource? _tcs;
-
+    
     internal bool Completed { get; private set; }
-
-    // logical sequence of first valid item
-    internal int HeadSequence { get; private set; }
-
-    // logical sequence of next item to write
-    internal int TailSequence { get; private set; }
-
-    public AsyncBoundedTopic(int capacity)
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
-        _capacity = capacity;
-        _buffer = new T[Math.Min(4, capacity)];
-    }
-
+    
+    internal CircularBuffer<T> Buffer { get; } = new(capacity);
+    
     public async ValueTask WriteAsync(T item, CancellationToken cancellationToken = default)
     {
         while (true)
         {
-            if (Completed)
-            {
-                throw new InvalidOperationException("The topic is already completed.");
-            }
-
             Task? waitTask;
             using (await Lock.LockAsync(cancellationToken))
             {
-                // Check if there is total capacity left
-                if (_size < _capacity)
+                if (Completed)
                 {
-                    // Grow  buffer if needed
-                    if (_size == _buffer.Length)
-                    {
-                        var newLength = Math.Min(_buffer.Length * 2, _capacity);
-                        var newBuffer = new T[newLength];
-                        if (_head < _tail)
-                        {
-                            // contiguous block
-                            Array.Copy(_buffer, _head, newBuffer, 0, _size);
-                        }
-                        else
-                        {
-                            var rightCount = _buffer.Length - _head;
-                            Array.Copy(_buffer, _head, newBuffer, 0, rightCount);
-                            Array.Copy(_buffer, 0, newBuffer, rightCount, _tail);
-                        }
-
-                        _buffer = newBuffer;
-                        _head = 0;
-                        _tail = _size;
-                    }
-
-                    _buffer[_tail] = item;
-                    _tail = (_tail + 1) % _buffer.Length;
-                    _size++;
-                    TailSequence++;
+                    throw new InvalidOperationException("The topic is already completed.");
+                }
+                
+                if (Buffer.TryEnqueueTail(item))
+                {
                     foreach (var reader in _readers)
                     {
                         reader.SignalNewItem();
@@ -95,14 +49,14 @@ public sealed class AsyncBoundedTopic<T>
 
     public async ValueTask<AsyncBoundedTopicReader<T>> CreateReader()
     {
-        if (Completed)
-        {
-            throw new InvalidOperationException("The topic is already completed.");
-        }
-
         using (await Lock.LockAsync())
         {
-            var reader = new AsyncBoundedTopicReader<T>(this, TailSequence);
+            if (Completed)
+            {
+                throw new InvalidOperationException("The topic is already completed.");
+            }
+            
+            var reader = new AsyncBoundedTopicReader<T>(this, Buffer.TailSequence);
             _readers.Add(reader);
             return reader;
         }
@@ -125,24 +79,15 @@ public sealed class AsyncBoundedTopic<T>
 
     internal void TryAdvanceHead()
     {
-        var minRead = _readers.Select(x => x.ReadIndex)
-            .DefaultIfEmpty(TailSequence)
-            .Min();
-
-        var itemsToRemove = minRead - HeadSequence;
-        if (itemsToRemove == 0)
+        var minRead = _readers.Count == 0 ? Buffer.TailSequence : _readers.Min(x => x.ReadIndex);
+        if (!Buffer.TryAdvanceHeadTo(minRead))
         {
             return;
         }
-
-        _head = (_head + itemsToRemove) % _buffer.Length;
-        _size -= itemsToRemove;
-        HeadSequence = minRead;
+        
         _tcs?.TrySetResult();
         _tcs = null;
     }
-
-    public T GetItem(int position) => _buffer[position % _buffer.Length];
 }
 
 public sealed class AsyncBoundedTopicReader<T>
@@ -165,7 +110,7 @@ public sealed class AsyncBoundedTopicReader<T>
             return ValueTask.FromCanceled<bool>(cancellationToken);
         }
 
-        if (ReadIndex < _topic.TailSequence)
+        if (ReadIndex < _topic.Buffer.TailSequence)
         {
             return ValueTask.FromResult(true);
         }
@@ -180,7 +125,7 @@ public sealed class AsyncBoundedTopicReader<T>
                 using (await _topic.Lock.LockAsync(ct))
                 {
                     // Item available
-                    if (ReadIndex < _topic.TailSequence)
+                    if (ReadIndex < _topic.Buffer.TailSequence)
                     {
                         return true;
                     }
@@ -204,7 +149,7 @@ public sealed class AsyncBoundedTopicReader<T>
 
     public ValueTask<T> GetCurrentAsync(CancellationToken cancellationToken = default)
     {
-        if (ReadIndex >= _topic.TailSequence)
+        if (ReadIndex >= _topic.Buffer.TailSequence)
         {
             throw new InvalidOperationException("No item available. Call WaitToReadAsync first.");
         }
@@ -214,7 +159,7 @@ public sealed class AsyncBoundedTopicReader<T>
         {
             using (lockTask.Result)
             {
-                var item = _topic.GetItem(ReadIndex);
+                var item = _topic.Buffer[ReadIndex];
                 ReadIndex++;
                 _topic.TryAdvanceHead();
                 return ValueTask.FromResult(item);
@@ -227,7 +172,7 @@ public sealed class AsyncBoundedTopicReader<T>
         {
             using (await _topic.Lock.LockAsync(ct))
             {
-                var item = _topic.GetItem(ReadIndex);
+                var item = _topic.Buffer[ReadIndex];
                 ReadIndex++;
                 _topic.TryAdvanceHead();
                 return item;
