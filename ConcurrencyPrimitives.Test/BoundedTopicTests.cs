@@ -1,4 +1,6 @@
-﻿namespace ConcurrencyPrimitives.Test;
+﻿using System.Threading.Channels;
+
+namespace ConcurrencyPrimitives.Test;
 
 public sealed class BoundedTopicTests
 {
@@ -35,5 +37,30 @@ public sealed class BoundedTopicTests
         Assert.True(read2Task.IsCompletedSuccessfully);
         Assert.Equal(1, actual[0]);
         Assert.Equal(1, actual[1]);
+    }
+    
+    [Fact]
+    public async Task Complete_ShouldUnblockWriters()
+    {
+        var sut = new BoundedTopic<int>(2);
+        await sut.WriteAsync(1);
+        await sut.WriteAsync(2);
+        var writeTask = sut.WriteAsync(3).AsTask();
+        
+        sut.Complete();
+        
+        await Assert.ThrowsAsync<ChannelClosedException>(async () => await writeTask);
+    }
+    
+    [Fact]
+    public async Task Complete_ShouldUnblockReaders()
+    {
+        var sut = new BoundedTopic<int>(2);
+        var reader = sut.CreateReader();
+        var readTask = reader.ReadAsync().AsTask();
+        
+        sut.Complete();
+        
+        await Assert.ThrowsAsync<ChannelClosedException>(async () => await readTask);
     }
 }

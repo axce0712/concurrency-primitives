@@ -62,6 +62,7 @@ public sealed class CircularBuffer<T> : IEnumerable<T>
     public bool TryAdvanceHeadTo(int sequence)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sequence);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(sequence, TailSequence);
         var itemsToRemove = sequence - HeadSequence;
         if (itemsToRemove <= 0)
         {

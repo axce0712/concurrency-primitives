@@ -59,4 +59,16 @@ public sealed class CircularBufferTests
         Assert.Equal([2, 3], sut);
         Assert.Equal(0, sut.RemainingSize);
     }
+    
+    [Fact]
+    public void TryAdvanceToHead_ShouldFailWhenIndexIsOutOfRange()
+    {
+        var sut = new CircularBuffer<int>(2);
+        sut.TryEnqueueTail(1);
+        sut.TryEnqueueTail(2);
+
+        void When() => sut.TryAdvanceHeadTo(3);
+
+        Assert.Throws<ArgumentOutOfRangeException>(When);
+    }
 }

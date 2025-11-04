@@ -9,7 +9,7 @@ public sealed class BoundedTopic<T>(int capacity)
     private readonly List<BoundedTopicReader<T>> _readers = [];
     private readonly Queue<TaskCompletionSource> _writers = new();
 
-    internal object SyncObj { get; } = new();
+    internal Lock Lock { get; } = new();
 
     internal CircularBuffer<T> Buffer { get; } = new(capacity);
 
@@ -23,7 +23,7 @@ public sealed class BoundedTopic<T>(int capacity)
         }
 
         TaskCompletionSource? tcs;
-        lock (SyncObj)
+        lock (Lock)
         {
             if (Completed)
             {
@@ -51,7 +51,7 @@ public sealed class BoundedTopic<T>(int capacity)
 
     public bool TryWrite(T item)
     {
-        lock (SyncObj)
+        lock (Lock)
         {
             if (Completed)
             {
@@ -114,7 +114,7 @@ public sealed class BoundedTopic<T>(int capacity)
 
     public BoundedTopicReader<T> CreateReader()
     {
-        lock (SyncObj)
+        lock (Lock)
         {
             if (Completed)
             {
@@ -129,7 +129,7 @@ public sealed class BoundedTopic<T>(int capacity)
 
     public void Complete()
     {
-        lock (SyncObj)
+        lock (Lock)
         {
             Completed = true;
             foreach (var reader in _readers)
@@ -174,7 +174,7 @@ public sealed class BoundedTopicReader<T>
     {
         get
         {
-            lock (_topic.SyncObj)
+            lock (_topic.Lock)
             {
                 return _topic.Buffer.TailSequence - ReadIndex;
             }
@@ -190,7 +190,7 @@ public sealed class BoundedTopicReader<T>
             return ValueTask.FromCanceled<bool>(cancellationToken);
         }
 
-        lock (_topic.SyncObj)
+        lock (_topic.Lock)
         {
             if (ReadIndex < _topic.Buffer.TailSequence)
             {
@@ -221,7 +221,7 @@ public sealed class BoundedTopicReader<T>
             return false;
         }
 
-        lock (_topic.SyncObj)
+        lock (_topic.Lock)
         {
             ReadIndex++;
             _topic.TryAdvanceHead();
